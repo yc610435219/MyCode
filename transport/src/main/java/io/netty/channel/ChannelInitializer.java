@@ -53,9 +53,6 @@ import java.util.concurrent.ConcurrentMap;
 public abstract class ChannelInitializer<C extends Channel> extends ChannelInboundHandlerAdapter {
 
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(ChannelInitializer.class);
-    // We use a ConcurrentMap as a ChannelInitializer is usually shared between all Channels in a Bootstrap /
-    // ServerBootstrap. This way we can reduce the memory usage compared to use Attributes.
-    private final ConcurrentMap<ChannelHandlerContext, Boolean> initMap = PlatformDependent.newConcurrentHashMap();
 
     /**
      * This method will be called once the {@link Channel} was registered. After the method returns this instance
@@ -67,21 +64,6 @@ public abstract class ChannelInitializer<C extends Channel> extends ChannelInbou
      *                      the {@link Channel}.
      */
     protected abstract void initChannel(C ch) throws Exception;
-
-    @Override
-    @SuppressWarnings("unchecked")
-    public final void channelRegistered(ChannelHandlerContext ctx) throws Exception {
-        // Normally this method will never be called as handlerAdded(...) should call initChannel(...) and remove
-        // the handler.
-        if (initChannel(ctx)) {
-            // we called initChannel(...) so we need to call now pipeline.fireChannelRegistered() to ensure we not
-            // miss an event.
-            ctx.pipeline().fireChannelRegistered();
-        } else {
-            // Called initChannel(...) before which is the expected behavior, so just forward the event.
-            ctx.fireChannelRegistered();
-        }
-    }
 
     /**
      * Handle the {@link Throwable} by logging and closing the {@link Channel}. Sub-classes may override this.
@@ -97,42 +79,20 @@ public abstract class ChannelInitializer<C extends Channel> extends ChannelInbou
     /**
      * {@inheritDoc} If override this method ensure you call super!
      */
+    @SuppressWarnings("unchecked")
     @Override
     public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
-        if (ctx.channel().isRegistered()) {
-            // This should always be true with our current DefaultChannelPipeline implementation.
-            // The good thing about calling initChannel(...) in handlerAdded(...) is that there will be no ordering
-            // surprises if a ChannelInitializer will add another ChannelInitializer. This is as all handlers
-            // will be added in the expected order.
-            initChannel(ctx);
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private boolean initChannel(ChannelHandlerContext ctx) throws Exception {
-        if (initMap.putIfAbsent(ctx, Boolean.TRUE) == null) { // Guard against re-entrance.
-            try {
-                initChannel((C) ctx.channel());
-            } catch (Throwable cause) {
-                // Explicitly call exceptionCaught(...) as we removed the handler before calling initChannel(...).
-                // We do so to prevent multiple calls to initChannel(...).
-                exceptionCaught(ctx, cause);
-            } finally {
-                remove(ctx);
-            }
-            return true;
-        }
-        return false;
-    }
-
-    private void remove(ChannelHandlerContext ctx) {
         try {
+            initChannel((C) ctx.channel());
+        } catch (Throwable cause) {
+            // Explicitly call exceptionCaught(...) as we removed the handler before calling initChannel(...).
+            // We do so to prevent multiple calls to initChannel(...).
+            exceptionCaught(ctx, cause);
+        } finally {
             ChannelPipeline pipeline = ctx.pipeline();
             if (pipeline.context(this) != null) {
                 pipeline.remove(this);
             }
-        } finally {
-            initMap.remove(ctx);
         }
     }
 }
